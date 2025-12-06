@@ -633,6 +633,10 @@ class Phase4CurriculumTrainer(BasePhaseTrainer):
             batch_states = []
             batch_actions = []
             
+            # Zero gradients at start of episode
+            self.optimizer.zero_grad()
+            self.action_optimizer.zero_grad()
+            
             for step, batch_main in enumerate(held_loader_main):
                 # Select initial task randomly
                 if step == 0:
@@ -733,9 +737,8 @@ class Phase4CurriculumTrainer(BasePhaseTrainer):
             
             # Update student
             self.optimizer.step()
-            self.optimizer.zero_grad()
             
-            # Compute policy gradient loss
+            # Compute policy gradient loss (with fresh gradients)
             batch_states = torch.cat(batch_states, 0)
             action_tensor = torch.cat(batch_actions, 0).unsqueeze(1)
             reward_tensor = torch.FloatTensor(
@@ -751,7 +754,6 @@ class Phase4CurriculumTrainer(BasePhaseTrainer):
             policy_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.action_model.parameters(), self.config.max_grad_norm)
             self.action_optimizer.step()
-            self.action_optimizer.zero_grad()
             
             # Track rewards
             total_reward = sum([r.item() for r in batch_rewards]) / len(held_loader_main.dataset)
