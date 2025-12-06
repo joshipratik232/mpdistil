@@ -728,7 +728,7 @@ class Phase4CurriculumTrainer(BasePhaseTrainer):
                 )
                 
                 batch_rewards.append(reward)
-                batch_states.append(state_space)
+                batch_states.append(state_space.detach().clone())
                 batch_actions.append(action_idx.unsqueeze(0))
             
             # Update student
