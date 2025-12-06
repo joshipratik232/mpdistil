@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mpdistil"
+version = "0.1.0"
+description = "Meta-Policy Knowledge Distillation for compact student models"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["knowledge-distillation", "meta-learning", "deep-learning", "nlp", "transformers"]
+authors = [
+  {name = "Ayan Sengupta"}
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+]
+
+dependencies = [
+  "torch>=1.13.0",
+  "transformers>=4.28.0",
+  "datasets>=2.12.0",
+  "numpy>=1.21.0",
+  "pandas>=1.3.0",
+  "scikit-learn>=1.0.0",
+  "scipy>=1.7.0",
+  "tqdm>=4.64.0",
+  "wandb>=0.15.0",
+  "matplotlib>=3.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/YOUR_USERNAME/mpdistil"
+Repository = "https://github.com/YOUR_USERNAME/mpdistil"
