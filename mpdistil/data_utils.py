@@ -87,12 +87,23 @@ def auto_detect_num_labels(dataloader: DataLoader) -> int:
         dataloader: DataLoader with labels
         
     Returns:
-        Number of unique labels
+        Number of unique labels (0 for sequence labels like in language modeling)
     """
     all_labels = []
     for batch in dataloader:
         labels = batch[-1]  # Last element is labels
-        all_labels.extend(labels.cpu().numpy().tolist())
+        
+        # Check if labels are sequences (language modeling) or single values (classification)
+        if len(labels.shape) > 1 and labels.shape[1] > 1:
+            # Sequence labels (language modeling) - return 0
+            return 0
+        
+        # Flatten and collect for classification
+        all_labels.extend(labels.cpu().numpy().flatten().tolist())
+    
+    # Return unique count for classification, handle empty case
+    if not all_labels:
+        return 0
     
     return len(set(all_labels))
 
