@@ -951,30 +951,34 @@ class MPDistilTrainer:
             self.config.student_epochs
         )
         
-        # Phase 3: Meta-Teacher
-        print("\n=== Phase 3: Meta-Teacher Learning ===")
-        t_optimizer2 = torch.optim.AdamW(
-            teacher_model2.parameters(),
-            lr=self.config.meta_lr
-        )
+        # Phase 3: Meta-Teacher (skip for language modeling - requires pooled outputs)
+        if not self.task_config.is_language_modeling:
+            print("\n=== Phase 3: Meta-Teacher Learning ===")
+            t_optimizer2 = torch.optim.AdamW(
+                teacher_model2.parameters(),
+                lr=self.config.meta_lr
+            )
+            
+            phase3_trainer = Phase3MetaTeacherTrainer(
+                teacher_model2,
+                t_optimizer2,
+                self.device,
+                self.config,
+                self.task_config,
+                self.teacher,
+                self.student
+            )
+            
+            history['phase3'] = phase3_trainer.train(
+                task_loaders[self.task_config.task_name]['held']['loader'],
+                task_loaders[self.task_config.task_name]['eval']['loader']
+            )
+        else:
+            print("\n=== Phase 3: Skipped (not applicable for language modeling) ===")
+            history['phase3'] = {'skipped': True, 'reason': 'Language modeling does not use pooled outputs'}
         
-        phase3_trainer = Phase3MetaTeacherTrainer(
-            teacher_model2,
-            t_optimizer2,
-            self.device,
-            self.config,
-            self.task_config,
-            self.teacher,
-            self.student
-        )
-        
-        history['phase3'] = phase3_trainer.train(
-            task_loaders[self.task_config.task_name]['held']['loader'],
-            task_loaders[self.task_config.task_name]['eval']['loader']
-        )
-        
-        # Phase 4: Curriculum Learning
-        if self.config.num_episodes > 0 and len(task_loaders) > 1:
+        # Phase 4: Curriculum Learning (skip for language modeling)
+        if self.config.num_episodes > 0 and len(task_loaders) > 1 and not self.task_config.is_language_modeling:
             print("\n=== Phase 4: Curriculum Learning ===")
             
             # Clone student for meta-learning
@@ -1009,5 +1013,9 @@ class MPDistilTrainer:
             
             # Update student with best from phase 4
             self.student.load_state_dict(student_model2.state_dict())
+        else:
+            if self.task_config.is_language_modeling:
+                print("\n=== Phase 4: Skipped (not applicable for language modeling) ===")
+                history['phase4'] = {'skipped': True, 'reason': 'Curriculum learning not applicable for language modeling'}
         
         return history
