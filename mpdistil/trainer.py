@@ -99,21 +99,36 @@ class BasePhaseTrainer:
                 student_out = out[0]
                 
                 # Get predictions
-                if not self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    # For LM, get argmax over vocab dimension
                     student_out_ = student_out.argmax(-1)
+                    # Flatten for metrics (will be skipped anyway for LM)
+                    all_preds.extend(student_out_[:, 0].cpu().numpy().tolist())
+                elif not self.task_config.is_regression:
+                    student_out_ = student_out.argmax(-1)
+                    all_preds.extend(student_out_.cpu().numpy().tolist())
                 else:
                     student_out_ = student_out[:, 0].clip(0, 5)
-                
-                all_preds.extend(student_out_.cpu().numpy().tolist())
+                    all_preds.extend(student_out_.cpu().numpy().tolist())
                 
                 if split == 'eval':
-                    if not self.task_config.is_regression:
+                    if self.task_config.is_language_modeling:
+                        # For LM, labels are sequences - just collect first token for metrics
+                        all_labels.extend(labels[:, 0].cpu().numpy().tolist())
+                    elif not self.task_config.is_regression:
                         all_labels.extend(labels.cpu().numpy().astype(int).tolist())
                     else:
                         all_labels.extend(labels.cpu().numpy().tolist())
                     
                     # Compute loss
-                    if self.task_config.is_regression:
+                    if self.task_config.is_language_modeling:
+                        shift_logits = student_out[..., :-1, :].contiguous()
+                        shift_labels = labels[..., 1:].contiguous()
+                        loss = self.loss_fn(
+                            shift_logits.view(-1, shift_logits.size(-1)),
+                            shift_labels.view(-1)
+                        )
+                    elif self.task_config.is_regression:
                         loss = self.loss_fn(student_out.view(-1), labels.view(-1))
                     else:
                         loss = self.loss_fn(
@@ -220,7 +235,15 @@ class Phase1TeacherTrainer(BasePhaseTrainer):
                 teacher_out = out[0]
                 
                 # Compute loss
-                if self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    # Language modeling: teacher_out shape [batch, seq_len, vocab_size]
+                    shift_logits = teacher_out[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    loss = self.loss_fn(
+                        shift_logits.view(-1, shift_logits.size(-1)),
+                        shift_labels.view(-1)
+                    )
+                elif self.task_config.is_regression:
                     loss = self.loss_fn(teacher_out.view(-1), labels.view(-1))
                 else:
                     loss = self.loss_fn(
@@ -345,7 +368,15 @@ class Phase2PKDTrainer(BasePhaseTrainer):
                     teacher_pooler = out[1][:student_pooler.shape[0]] if out[1] is not None else out[3][:student_pooler.shape[0]]
                 
                 # Hard loss (task loss)
-                if self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    # Language modeling loss
+                    shift_logits = student_out[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    hard_loss = self.loss_fn(
+                        shift_logits.view(-1, shift_logits.size(-1)),
+                        shift_labels.view(-1)
+                    )
+                elif self.task_config.is_regression:
                     hard_loss = self.loss_fn(student_out.view(-1), labels.view(-1))
                 else:
                     hard_loss = self.loss_fn(
@@ -354,7 +385,15 @@ class Phase2PKDTrainer(BasePhaseTrainer):
                     )
                 
                 # Soft loss (distillation)
-                if self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    # For LM: use shifted logits
+                    shift_teacher_logits = teacher_out[..., :-1, :].contiguous()
+                    shift_student_logits = student_out[..., :-1, :].contiguous()
+                    T = self.config.temperature
+                    soft_targets = F.softmax(shift_teacher_logits / T, dim=-1)
+                    probs = F.softmax(shift_student_logits / T, dim=-1)
+                    soft_loss = F.mse_loss(soft_targets, probs) * T * T
+                elif self.task_config.is_regression:
                     soft_loss = F.mse_loss(teacher_out, student_out)
                 else:
                     T = self.config.temperature
@@ -511,7 +550,14 @@ class Phase3MetaTeacherTrainer(BasePhaseTrainer):
             # Compute loss
             if self.config.use_competitive_loss:
                 # Competitive loss
-                if self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    shift_logits = teacher_out[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    teacher_loss2 = self.loss_fn(
+                        shift_logits.view(-1, shift_logits.size(-1)),
+                        shift_labels.view(-1)
+                    )
+                elif self.task_config.is_regression:
                     teacher_loss2 = self.loss_fn(teacher_out.view(-1), labels.view(-1))
                 else:
                     teacher_loss2 = self.loss_fn(
@@ -520,21 +566,32 @@ class Phase3MetaTeacherTrainer(BasePhaseTrainer):
                     )
                 
                 # Competitive component
-                if not self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    # For LM, use perplexity-based comparison
+                    teacher_loss = teacher_loss2  # Simplified for LM
+                elif not self.task_config.is_regression:
                     teacher_out_prob = nn.Softmax(-1)(teacher_out).gather(
                         dim=1, index=labels.long().view(-1, 1)
                     ).squeeze()
                     teacher_out2_prob = nn.Softmax(-1)(teacher_out2).gather(
                         dim=1, index=labels.long().view(-1, 1)
                     ).squeeze()
+                    teacher_loss = -torch.mean(teacher_out_prob) + torch.mean(teacher_out2_prob) + teacher_loss2
                 else:
                     teacher_out_prob = -1 * torch.abs(labels - teacher_out)
                     teacher_out2_prob = -1 * torch.abs(labels - teacher_out2)
-                
-                teacher_loss = -torch.mean(teacher_out_prob) + torch.mean(teacher_out2_prob) + teacher_loss2
+                    teacher_loss = -torch.mean(teacher_out_prob) + torch.mean(teacher_out2_prob) + teacher_loss2
             else:
                 # Collaborative loss (Equation 2)
-                if self.task_config.is_regression:
+                if self.task_config.is_language_modeling:
+                    shift_logits1 = teacher_out[..., :-1, :].contiguous()
+                    shift_logits2 = teacher_out2[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    teacher_loss = (
+                        0.5 * self.loss_fn(shift_logits1.view(-1, shift_logits1.size(-1)), shift_labels.view(-1)) +
+                        0.5 * self.loss_fn(shift_logits2.view(-1, shift_logits2.size(-1)), shift_labels.view(-1))
+                    )
+                elif self.task_config.is_regression:
                     teacher_loss = (
                         0.5 * self.loss_fn(teacher_out.view(-1), labels.view(-1)) +
                         0.5 * self.loss_fn(teacher_out2.view(-1), labels.view(-1))
