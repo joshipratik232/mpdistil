@@ -296,7 +296,8 @@ class MPDistil:
         # Create task config
         task_config = TaskConfig(
             task_name=self.task_name,
-            num_labels=self.num_labels
+            num_labels=self.num_labels if self.task_type == 'classification' else 0,
+            task_type=self.task_type
         )
         
         # Initialize trainer
