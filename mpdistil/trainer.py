@@ -365,7 +365,11 @@ class Phase2PKDTrainer(BasePhaseTrainer):
                         token_type_ids=token_type_ids
                     )
                     teacher_out = out[0]
-                    teacher_pooler = out[1][:student_pooler.shape[0]] if out[1] is not None else out[3][:student_pooler.shape[0]]
+                    # Handle pooler output (may be None for decoder models)
+                    if student_pooler is not None:
+                        teacher_pooler = out[1][:student_pooler.shape[0]] if out[1] is not None else out[3][:student_pooler.shape[0]]
+                    else:
+                        teacher_pooler = None
                 
                 # Hard loss (task loss)
                 if self.task_config.is_language_modeling:
@@ -402,7 +406,8 @@ class Phase2PKDTrainer(BasePhaseTrainer):
                     soft_loss = F.mse_loss(soft_targets, probs) * T * T
                 
                 # PKD loss (patient knowledge distillation)
-                if self.config.beta == 0:
+                # Skip PKD for LM tasks (no pooler) or if beta=0
+                if self.config.beta == 0 or student_pooler is None or teacher_pooler is None:
                     pkd_loss = torch.zeros_like(soft_loss)
                 else:
                     t_features = teacher_pooler / teacher_pooler.norm(dim=-1).unsqueeze(-1)
