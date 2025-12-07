@@ -870,8 +870,8 @@ class MPDistilTrainer:
         
         # Clone teacher for meta-learning
         teacher_model2 = cp(self.teacher)
-        # Freeze encoder
-        for param in teacher_model2.encoder.parameters():
+        # Freeze the base model (encoder or decoder)
+        for param in teacher_model2.model.parameters():
             param.requires_grad = False
         
         phase2_trainer = Phase2PKDTrainer(
