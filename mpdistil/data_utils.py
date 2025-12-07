@@ -528,3 +528,145 @@ def load_superglue_dataset(
     }
     
     return loaders_dict, config['num_labels']
+
+
+def load_alpaca_dataset(
+    tokenizer,
+    max_seq_length: int = 512,
+    batch_size: int = 4,
+    num_samples: Optional[int] = None,
+    dataset_name: str = 'tatsu-lab/alpaca'
+) -> Dict:
+    """Load Alpaca-style instruction tuning dataset for language modeling.
+    
+    Args:
+        tokenizer: HuggingFace tokenizer
+        max_seq_length: Maximum sequence length (default: 512)
+        batch_size: Batch size for dataloaders (default: 4)
+        num_samples: Limit number of samples (for quick testing)
+        dataset_name: HuggingFace dataset name (default: 'tatsu-lab/alpaca')
+        
+    Returns:
+        Dict with 'train' and 'val' DataLoaders
+    """
+    from datasets import load_dataset
+    
+    # Load dataset
+    try:
+        dataset = load_dataset(dataset_name)
+        if 'train' not in dataset:
+            # If no train split, use the first available split
+            split_name = list(dataset.keys())[0]
+            dataset = dataset[split_name].train_test_split(test_size=0.1, seed=42)
+    except Exception as e:
+        print(f"Warning: Could not load {dataset_name}, using sample data. Error: {e}")
+        # Create a small sample dataset for testing
+        dataset = {
+            'train': [
+                {'instruction': 'What is AI?', 'input': '', 'output': 'AI stands for Artificial Intelligence.'},
+                {'instruction': 'Explain machine learning', 'input': '', 'output': 'Machine learning is a subset of AI.'},
+            ] * 10,
+            'test': [
+                {'instruction': 'What is deep learning?', 'input': '', 'output': 'Deep learning uses neural networks.'},
+            ] * 5
+        }
+        from datasets import Dataset as HFDataset
+        dataset = {
+            'train': HFDataset.from_list(dataset['train']),
+            'test': HFDataset.from_list(dataset['test'])
+        }
+    
+    # Limit samples if requested
+    if num_samples:
+        dataset['train'] = dataset['train'].select(range(min(num_samples, len(dataset['train']))))
+        if 'test' in dataset:
+            dataset['test'] = dataset['test'].select(range(min(num_samples // 5, len(dataset['test']))))
+    
+    def tokenize_function(examples):
+        """Format and tokenize instruction-following examples."""
+        prompts = []
+        for instruction, input_text, output in zip(
+            examples.get('instruction', [''] * len(examples.get('output', []))),
+            examples.get('input', [''] * len(examples.get('output', []))),
+            examples.get('output', examples.get('text', [''] * len(examples)))
+        ):
+            if input_text and input_text.strip():
+                prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n{output}"
+            else:
+                prompt = f"### Instruction:\n{instruction}\n\n### Response:\n{output}"
+            prompts.append(prompt)
+        
+        # Tokenize
+        tokenized = tokenizer(
+            prompts,
+            max_length=max_seq_length,
+            truncation=True,
+            padding='max_length',
+            return_tensors='pt'
+        )
+        
+        # For causal LM, labels = input_ids (shifted internally by model)
+        tokenized['labels'] = tokenized['input_ids'].clone()
+        
+        return tokenized
+    
+    # Tokenize datasets
+    tokenized_train = dataset['train'].map(
+        tokenize_function,
+        batched=True,
+        remove_columns=dataset['train'].column_names
+    )
+    
+    if 'test' in dataset:
+        tokenized_val = dataset['test'].map(
+            tokenize_function,
+            batched=True,
+            remove_columns=dataset['test'].column_names
+        )
+    else:
+        # Split train if no test set
+        split_dataset = tokenized_train.train_test_split(test_size=0.1, seed=42)
+        tokenized_train = split_dataset['train']
+        tokenized_val = split_dataset['test']
+    
+    # Set format
+    tokenized_train.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+    tokenized_val.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+    
+    # Create wrapper dataset
+    class AlpacaDatasetWrapper(Dataset):
+        def __init__(self, hf_dataset):
+            self.dataset = hf_dataset
+        
+        def __len__(self):
+            return len(self.dataset)
+        
+        def __getitem__(self, idx):
+            item = self.dataset[idx]
+            return (
+                item['input_ids'],
+                item['attention_mask'],
+                torch.zeros_like(item['input_ids']),  # Dummy token_type_ids for compatibility
+                item['labels']
+            )
+    
+    train_dataset = AlpacaDatasetWrapper(tokenized_train)
+    val_dataset = AlpacaDatasetWrapper(tokenized_val)
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False
+    )
+    
+    return {
+        'train': train_loader,
+        'val': val_loader
+    }

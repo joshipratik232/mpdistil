@@ -35,6 +35,7 @@ from .core import MPDistil
 from .config import TrainingConfig, TaskConfig
 from .data_utils import (
     load_superglue_dataset,
+    load_alpaca_dataset,
     create_simple_dataloader,
     prepare_task_loaders
 )
@@ -45,6 +46,7 @@ __all__ = [
     'TrainingConfig',
     'TaskConfig',
     'load_superglue_dataset',
+    'load_alpaca_dataset',
     'create_simple_dataloader',
     'prepare_task_loaders',
     '__version__'

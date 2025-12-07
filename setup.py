@@ -18,7 +18,7 @@ setup(
     description="Meta-Policy Knowledge Distillation for compact student models",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/YOUR_USERNAME/mpdistil",
+    url="https://github.com/joshipratik232/mpdistil",
     packages=find_packages(exclude=["examples", "tests"]),
     classifiers=[
         "Development Status :: 3 - Alpha",

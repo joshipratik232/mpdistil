@@ -58,7 +58,7 @@ class MPDistil:
         num_labels: Number of output classes
         teacher_model: HuggingFace model name for teacher (default: 'bert-base-uncased')
         student_model: HuggingFace model name for student (default: 'bert-base-uncased')
-        student_layers: Number of layers for student encoder (default: 6)
+        student_layers: Number of layers for student encoder (default: -1, -1 means use original architecture)
         device: Device to use ('auto', 'cuda', 'cpu')
         output_dir: Directory for checkpoints and outputs
     """
@@ -66,14 +66,16 @@ class MPDistil:
     def __init__(
         self,
         task_name: str,
-        num_labels: int,
+        num_labels: Optional[int] = None,
+        task_type: str = 'classification',
         teacher_model: str = 'bert-base-uncased',
         student_model: str = 'bert-base-uncased',
-        student_layers: int = 6,
+        student_layers: int = -1,
         device: str = 'auto',
         output_dir: str = './mpdistil_outputs'
     ):
         self.task_name = task_name
+        self.task_type = task_type
         self.num_labels = num_labels
         self.output_dir = output_dir
         
@@ -87,6 +89,9 @@ class MPDistil:
         
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(teacher_model)
+        # Ensure tokenizer has pad token (needed for GPT-2)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         
         # Store model configs
         self._teacher_model_name = teacher_model
@@ -100,7 +105,14 @@ class MPDistil:
         
         # Store task info (will be updated in fit())
         self.task_names = [task_name]
-        self.label_nums = {task_name.lower(): num_labels}
+        # For language modeling, num_labels might be None
+        if task_type == 'classification':
+            if num_labels is None:
+                raise ValueError("num_labels must be provided for classification tasks")
+            self.label_nums = {task_name.lower(): num_labels}
+        else:
+            # Language modeling doesn't use label_nums
+            self.label_nums = {task_name.lower(): 0}  # Placeholder
     
     def _set_seed(self, seed: int):
         """Set random seed for reproducibility.
@@ -118,23 +130,32 @@ class MPDistil:
         """Initialize teacher, student, and action models."""
         # Initialize teacher config
         teacher_config = AutoConfig.from_pretrained(
-            self._teacher_model_name,
-            num_labels=self.num_labels
+            self._teacher_model_name
         )
+        if self.task_type == 'classification' and self.num_labels:
+            teacher_config.num_labels = self.num_labels
         
-        # Initialize student config (with reduced layers)
+        # Initialize student config
         student_config = AutoConfig.from_pretrained(
-            self._student_model_name,
-            num_labels=self.num_labels
+            self._student_model_name
         )
-        student_config.num_hidden_layers = self._student_layers
+        if self.task_type == 'classification' and self.num_labels:
+            student_config.num_labels = self.num_labels
+        
+        # Only slice student layers if explicitly requested (student_layers > 0)
+        if self._student_layers > 0 and hasattr(student_config, 'num_hidden_layers'):
+            print(f"Slicing student model to {self._student_layers} layers (original: {student_config.num_hidden_layers})")
+            student_config.num_hidden_layers = self._student_layers
+        elif self._student_layers == -1:
+            print(f"Using original student architecture ({student_config.num_hidden_layers} layers, no slicing)")
         
         # Initialize teacher model
         self.teacher_model = FineTunedModel(
             self.task_names,
             self.label_nums,
             teacher_config,
-            pretrained_model_name=self._teacher_model_name
+            pretrained_model_name=self._teacher_model_name,
+            task_type=self.task_type
         ).to(self.device)
         
         # Initialize student model
@@ -142,7 +163,8 @@ class MPDistil:
             self.task_names,
             self.label_nums,
             student_config,
-            pretrained_model_name=self._student_model_name
+            pretrained_model_name=self._student_model_name,
+            task_type=self.task_type
         ).to(self.device)
         
         # Initialize action model
@@ -168,6 +190,7 @@ class MPDistil:
         test_loader: Optional[DataLoader] = None,
         meta_loaders: Optional[Dict[str, DataLoader]] = None,
         config: Optional[TrainingConfig] = None,
+        report_to: Optional[str] = None,
         **config_kwargs
     ) -> Dict:
         """Train the MPDistil model.
@@ -186,8 +209,9 @@ class MPDistil:
             meta_loaders: Optional dict of auxiliary task DataLoaders for curriculum learning
                 Format: {'TaskName': dataloader, ...}
             config: TrainingConfig object (creates default if None)
+            report_to: Where to log metrics ('wandb', 'tensorboard', 'none', or None)
             **config_kwargs: Override specific config parameters
-                Examples: teacher_epochs=5, student_lr=1e-4, alpha=0.7
+                Examples: teacher_epochs=5, student_lr=1e-4, alpha=0.7, report_to='wandb'
         
         Returns:
             Dictionary with training history from all phases
@@ -217,6 +241,25 @@ class MPDistil:
             config = TrainingConfig()
         if config_kwargs:
             config.merge(**config_kwargs)
+        
+        # Override report_to if provided as parameter
+        if report_to is not None:
+            config.report_to = report_to
+        
+        # Initialize WandB if requested
+        if config.report_to == 'wandb':
+            try:
+                import wandb
+                wandb.init(
+                    project=config.wandb_project,
+                    entity=config.wandb_entity,
+                    name=config.wandb_run_name or f"{self.task_name}_{self.task_type}",
+                    config=config.to_dict()
+                )
+                print("✓ WandB logging enabled")
+            except ImportError:
+                print("⚠ WandB not installed. Install with: pip install wandb")
+                config.report_to = None
         
         # Set seed
         self._set_seed(config.seed)

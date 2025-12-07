@@ -5,8 +5,49 @@ This module provides metric computation functions for various tasks.
 
 from typing import Dict, List, Union
 import numpy as np
+import torch
 from sklearn.metrics import accuracy_score, f1_score, matthews_corrcoef
 from scipy.stats import pearsonr, spearmanr
+
+
+def compute_perplexity(loss: float) -> float:
+    """Compute perplexity from loss.
+    
+    Args:
+        loss: Cross-entropy loss value
+        
+    Returns:
+        Perplexity score
+    """
+    return np.exp(loss)
+
+
+def compute_perplexity_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    ignore_index: int = -100
+) -> float:
+    """Compute perplexity from logits and labels.
+    
+    Args:
+        logits: Model logits [batch_size, seq_len, vocab_size]
+        labels: Ground truth labels [batch_size, seq_len]
+        ignore_index: Index to ignore in loss computation (default: -100)
+        
+    Returns:
+        Perplexity score
+    """
+    import torch.nn.functional as F
+    
+    # Flatten logits and labels
+    logits_flat = logits.view(-1, logits.size(-1))
+    labels_flat = labels.view(-1)
+    
+    # Compute cross-entropy loss
+    loss = F.cross_entropy(logits_flat, labels_flat, ignore_index=ignore_index)
+    
+    # Convert to perplexity
+    return compute_perplexity(loss.item())
 
 
 def simple_accuracy(preds: Union[List, np.ndarray], labels: Union[List, np.ndarray]) -> float:

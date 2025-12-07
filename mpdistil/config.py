@@ -83,8 +83,11 @@ class TrainingConfig:
     fp16_opt_level: str = 'O1'
     
     # Logging
-    wandb_logging: bool = False
+    report_to: Optional[str] = None  # 'wandb', 'tensorboard', 'none', or None
+    wandb_logging: bool = False  # Deprecated: use report_to='wandb'
     wandb_project: str = 'mpdistil'
+    wandb_entity: Optional[str] = None
+    wandb_run_name: Optional[str] = None
     verbose: bool = True
     
     # Checkpointing
@@ -131,17 +134,26 @@ class TaskConfig:
     
     Attributes:
         task_name: Name of the task
-        num_labels: Number of output classes
-        output_mode: 'classification' or 'regression'
-        metric: Primary metric to optimize ('accuracy', 'f1', 'mcc', 'correlation')
+        task_type: Type of task ('classification', 'language_modeling', 'regression')
+        num_labels: Number of output classes (for classification/regression)
+        vocab_size: Vocabulary size (for language modeling)
+        output_mode: 'classification', 'language_modeling', or 'regression'
+        metric: Primary metric to optimize
         label_mapping: Optional mapping from class indices to string labels
     """
     
     task_name: str
-    num_labels: int
-    output_mode: Literal['classification', 'regression'] = 'classification'
+    task_type: Literal['classification', 'language_modeling', 'regression'] = 'classification'
+    num_labels: Optional[int] = None
+    vocab_size: Optional[int] = None
+    output_mode: Optional[str] = None  # Auto-set from task_type
     metric: str = 'accuracy'
     label_mapping: Optional[Dict[int, str]] = None
+    
+    def __post_init__(self):
+        """Auto-set output_mode from task_type if not provided."""
+        if self.output_mode is None:
+            self.output_mode = self.task_type
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary.
@@ -170,4 +182,13 @@ class TaskConfig:
         Returns:
             True if regression, False if classification
         """
-        return self.output_mode == 'regression'
+        return self.task_type == 'regression'
+    
+    @property
+    def is_language_modeling(self) -> bool:
+        """Check if this is a language modeling task.
+        
+        Returns:
+            True if language modeling, False otherwise
+        """
+        return self.task_type == 'language_modeling'
